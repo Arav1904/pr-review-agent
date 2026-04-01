@@ -38,10 +38,25 @@ def get_pr_info():
     pr_number = pr["number"]
     repo_full = event["repository"]["full_name"]
     diff_url  = pr["diff_url"]
+    is_draft  = pr.get("draft", False)
+    title     = pr.get("title", "")
+    author    = pr.get("user", {}).get("login", "unknown")
 
-    diff_resp = requests.get(diff_url, headers=get_headers())
-    diff_text = diff_resp.text[:15000]
-    return repo_full, pr_number, diff_text
+    if is_draft:
+        print("📝 Draft PR detected — skipping full review")
+        return repo_full, pr_number, "", True, title, author
+
+    headers   = get_headers()
+    diff_resp = requests.get(diff_url, headers=headers)
+    diff_text = diff_resp.text
+
+    too_large = False
+    if len(diff_text) > 15000:
+        print(f"⚠️  Large PR detected ({len(diff_text)} chars) — truncating")
+        diff_text = diff_text[:15000]
+        too_large = True
+
+    return repo_full, pr_number, diff_text, False, title, author
 
 def get_pr_files(repo_full, pr_number):
     url  = f"https://api.github.com/repos/{repo_full}/pulls/{pr_number}/files"
@@ -60,21 +75,32 @@ def find_existing_bot_comment(repo_full, pr_number):
     return None
 
 def post_or_update_comment(repo_full, pr_number, body):
+    from datetime import datetime, timezone
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    footer = (
+        f"\n\n---\n"
+        f"*🤖 ReviewBot powered by [GitAgent](https://gitagent.sh) + Gemini 2.0 — "
+        f"Last run: {timestamp} — "
+        f"Push a new commit to re-trigger.*"
+    )
+    full_body = body + footer
+
     existing_id = find_existing_bot_comment(repo_full, pr_number)
     if existing_id:
         url  = f"https://api.github.com/repos/{repo_full}/issues/comments/{existing_id}"
-        resp = requests.patch(url, headers=get_headers(), json={"body": body})
+        resp = requests.patch(url, headers=get_headers(), json={"body": full_body})
         if resp.status_code == 200:
             print("✅ Existing review comment updated!")
         else:
             print(f"❌ Update failed: {resp.status_code}")
     else:
         url  = f"https://api.github.com/repos/{repo_full}/issues/{pr_number}/comments"
-        resp = requests.post(url, headers=get_headers(), json={"body": body})
+        resp = requests.post(url, headers=get_headers(), json={"body": full_body})
         if resp.status_code == 201:
             print("✅ New review comment posted!")
         else:
             print(f"❌ Post failed: {resp.status_code} — {resp.text}")
+            raise Exception(f"Failed to post comment: {resp.status_code}")
 
 def apply_labels(repo_full, pr_number, review_text, score):
     ensure_labels_exist(repo_full)
@@ -189,16 +215,25 @@ if __name__ == "__main__":
     if not GITHUB_TOKEN:
         raise Exception("❌ GITHUB_TOKEN is missing!")
 
-    repo_full, pr_number, diff_text = get_pr_info()
+    repo_full, pr_number, diff_text, is_draft, title, author = get_pr_info()
     print(f"📋 Reviewing PR #{pr_number} in {repo_full}")
-    print(f"📏 Diff size: {len(diff_text)} characters")
 
-    file_list = get_pr_files(repo_full, pr_number)
-    print(f"📂 Files changed: {file_list}")
+    if is_draft:
+        draft_msg = (
+            "## 🤖 ReviewBot\n"
+            "⏭️ **Draft PR detected** — I'll review this when you mark it ready for review.\n\n"
+            "*Remove draft status to trigger a full review.*"
+        )
+        post_or_update_comment(repo_full, pr_number, draft_msg)
+        print("✅ Draft notice posted.")
+    else:
+        print(f"📏 Diff size: {len(diff_text)} characters")
+        file_list = get_pr_files(repo_full, pr_number)
+        print(f"📂 Files changed: {file_list}")
 
-    review, score = generate_review(diff_text, file_list)
-    print(f"📊 Health Score: {score}/100")
+        review, score = generate_review(diff_text, file_list)
+        print(f"📊 Health Score: {score}/100")
 
-    post_or_update_comment(repo_full, pr_number, review)
-    apply_labels(repo_full, pr_number, review, score)
-    print("🎉 Done!")
+        post_or_update_comment(repo_full, pr_number, review)
+        apply_labels(repo_full, pr_number, review, score)
+        print("🎉 Done!")
