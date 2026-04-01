@@ -1,16 +1,16 @@
 import os
 import json
 import requests
-import google.generativeai as genai
+from google import genai
 
 # ── Config ──────────────────────────────────────────────
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 GITHUB_TOKEN   = os.environ.get("GITHUB_TOKEN")
 EVENT_PATH     = os.environ.get("GITHUB_EVENT_PATH")
 
-genai.configure(api_key=GEMINI_API_KEY)
+client = genai.Client(api_key=GEMINI_API_KEY)
 
-# ── Load SOUL + SKILL for system prompt ─────────────────
+# ── Load agent files ─────────────────────────────────────
 def load_file(path):
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -24,7 +24,7 @@ SKILL = load_file("skills/pr-review/SKILL.md")
 
 SYSTEM_PROMPT = f"{SOUL}\n\n---\n\n{RULES}\n\n---\n\n{SKILL}"
 
-# ── Fetch PR diff ────────────────────────────────────────
+# ── Fetch PR info ────────────────────────────────────────
 def get_pr_info():
     with open(EVENT_PATH, "r") as f:
         event = json.load(f)
@@ -46,30 +46,24 @@ def get_pr_info():
 # ── Call Gemini ──────────────────────────────────────────
 def generate_review(diff_text):
     if not diff_text.strip():
-        return "## 🤖 ReviewBot\nNo code changes detected in this PR — nothing to review."
+        return "## 🤖 ReviewBot\nNo code changes detected — nothing to review."
 
-    model = genai.GenerativeModel(
-        model_name="gemini-1.5-flash",
-        system_instruction=SYSTEM_PROMPT
+    prompt = f"{SYSTEM_PROMPT}\n\nReview this PR diff:\n\n```diff\n{diff_text}\n```"
+
+    response = client.models.generate_content(
+        model="gemini-2.0-flash",
+        contents=prompt
     )
-
-    prompt = f"""Please review the following Pull Request diff and provide your structured review.
-````diff
-{diff_text}
-```"""
-
-    response = model.generate_content(prompt)
     return response.text
 
-# ── Post comment to GitHub ───────────────────────────────
+# ── Post to GitHub ───────────────────────────────────────
 def post_github_comment(repo_full, pr_number, comment):
     url = f"https://api.github.com/repos/{repo_full}/issues/{pr_number}/comments"
     headers = {
         "Authorization": f"Bearer {GITHUB_TOKEN}",
         "Accept": "application/vnd.github+json",
     }
-    payload = {"body": comment}
-    resp = requests.post(url, headers=headers, json=payload)
+    resp = requests.post(url, headers=headers, json={"body": comment})
     if resp.status_code == 201:
         print("✅ Review posted successfully!")
     else:
@@ -90,5 +84,6 @@ if __name__ == "__main__":
     print(f"📏 Diff size: {len(diff_text)} characters")
 
     review = generate_review(diff_text)
-    print("✍️  Review generated, posting to GitHub...")
+    print("✍️  Posting review to GitHub...")
     post_github_comment(repo_full, pr_number, review)
+    
