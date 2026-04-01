@@ -37,7 +37,6 @@ def get_pr_info():
         "Authorization": f"Bearer {GITHUB_TOKEN}",
         "Accept": "application/vnd.github+json"
     }
-
     diff_resp = requests.get(diff_url, headers=headers)
     diff_text = diff_resp.text[:12000]
 
@@ -86,4 +85,3 @@ if __name__ == "__main__":
     review = generate_review(diff_text)
     print("✍️  Posting review to GitHub...")
     post_github_comment(repo_full, pr_number, review)
-    
