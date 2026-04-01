@@ -1,15 +1,57 @@
 import os
 import json
 import re
+import time
 import requests
-from google import genai
 
-# ── Config ───────────────────────────────────────────────
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+GROQ_API_KEY   = os.environ.get("GROQ_API_KEY")
 GITHUB_TOKEN   = os.environ.get("GITHUB_TOKEN")
 EVENT_PATH     = os.environ.get("GITHUB_EVENT_PATH")
 
-client = genai.Client(api_key=GEMINI_API_KEY)
+def call_llm(prompt):
+    """Try Gemini first, fall back to Groq if quota exceeded."""
+    # Try Gemini
+    if GEMINI_API_KEY:
+        try:
+            from google import genai
+            client = genai.Client(api_key=GEMINI_API_KEY)
+            response = client.models.generate_content(
+                model="gemini-2.0-flash-lite",
+                contents=prompt
+            )
+            print("✅ Used Gemini")
+            return response.text
+        except Exception as e:
+            if "429" in str(e):
+                print("⚠️  Gemini quota exhausted, falling back to Groq...")
+            else:
+                print(f"⚠️  Gemini error: {e}, falling back to Groq...")
+
+    # Fall back to Groq
+    if GROQ_API_KEY:
+        headers = {
+            "Authorization": f"Bearer {GROQ_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": "llama-3.3-70b-versatile",
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 2000,
+            "temperature": 0.3
+        }
+        resp = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers=headers,
+            json=payload
+        )
+        if resp.status_code == 200:
+            print("✅ Used Groq fallback")
+            return resp.json()["choices"][0]["message"]["content"]
+        else:
+            raise Exception(f"Groq also failed: {resp.status_code} — {resp.text}")
+
+    raise Exception("❌ No working LLM available — check API keys!")
 
 # ── Load agent files ──────────────────────────────────────
 def load_file(path):
@@ -187,11 +229,7 @@ Remember: Health Score 0-100 where 100 is perfect code."""
     import time
     for attempt in range(3):
         try:
-            response = client.models.generate_content(
-                model="gemini-2.0-flash-lite",
-                contents=prompt
-            )
-            review_text = response.text
+            review_text = call_llm(prompt)
             score = 70
             match = re.search(r"Health Score:\s*(\d+)", review_text)
             if match:
