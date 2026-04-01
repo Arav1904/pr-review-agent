@@ -132,7 +132,7 @@ Review the following diff carefully and respond in this EXACT format:
 
 ---
 
-### 🐛 HIGH — Bugs & Logic Errors  
+### 🐛 HIGH — Bugs & Logic Errors
 [List bugs, wrong logic, unhandled exceptions. Write "None found." if clean.]
 
 ---
@@ -155,21 +155,30 @@ Here is the diff to review:
 {diff_text}
 ```
 
-Remember: Health Score 0-100 where 100 is perfect code. Be honest and specific."""
+Remember: Health Score 0-100 where 100 is perfect code."""
 
-    response = client.models.generate_content(
-        model="gemini-2.0-flash-lite",
-        contents=prompt
-    )
-    review_text = response.text
+    # Retry up to 3 times on quota errors
+    import time
+    for attempt in range(3):
+        try:
+            response = client.models.generate_content(
+                model="gemini-2.0-flash-lite",
+                contents=prompt
+            )
+            review_text = response.text
+            score = 70
+            match = re.search(r"Health Score:\s*(\d+)", review_text)
+            if match:
+                score = int(match.group(1))
+            return review_text, score
 
-    # Extract health score
-    score = 70  # default
-    match = re.search(r"Health Score:\s*(\d+)", review_text)
-    if match:
-        score = int(match.group(1))
-
-    return review_text, score
+        except Exception as e:
+            if "429" in str(e) and attempt < 2:
+                wait = 35 * (attempt + 1)
+                print(f"⏳ Quota hit, waiting {wait}s before retry {attempt + 2}/3...")
+                time.sleep(wait)
+            else:
+                raise
 
 # ── Main ─────────────────────────────────────────────────
 if __name__ == "__main__":
