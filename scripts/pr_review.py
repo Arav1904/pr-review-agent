@@ -259,10 +259,10 @@ def generate_review(diff_text, file_list, config=None, memory=""):
     if not diff_text.strip():
         return "## 🤖 ReviewBot\nNo code changes detected — nothing to review.", 100
 
-    strictness = config.get("strictness", "medium")
-    focus      = config.get("focus", {})
+    strictness   = config.get("strictness", "medium")
+    focus        = config.get("focus", {})
     custom_rules = config.get("custom_rules", [])
-    files_str  = "\n".join(f"- {f}" for f in file_list) if file_list else "Unknown"
+    files_str    = "\n".join(f"- {f}" for f in file_list) if file_list else "Unknown"
 
     strictness_guide = {
         "low":    "Only flag critical bugs and security issues. Skip minor style issues.",
@@ -295,7 +295,7 @@ Respond in EXACTLY this format:
 ---
 
 ### 🔒 CRITICAL Issues
-[Security issues. Write "None found." if clean.]
+[Security issues, hardcoded secrets, injection risks. Write "None found." if clean.]
 
 ---
 
@@ -321,6 +321,7 @@ Diff:
 ```diff
 {diff_text}
 ```
+<<<<<<< HEAD
 CRITICAL SCORING RULES — follow exactly, do not give lazy round numbers:
 - 100: Reserved for absolutely perfect code — zero issues, zero suggestions possible. Extremely rare.
 - 90-99: Excellent code, at most 1 trivial nitpick, no bugs
@@ -333,18 +334,81 @@ CRITICAL SCORING RULES — follow exactly, do not give lazy round numbers:
 - NEVER give above 92 for markdown or text-only files
 - Most real PRs should score between 62-88
 - Give exact numbers like 67, 73, 81 — not round numbers like 70, 80, 90
+=======
+
+CRITICAL SCORING RULES — follow exactly, do not give lazy round numbers:
+- 100: Reserved for absolutely perfect code — zero issues, zero suggestions, zero improvements possible. Extremely rare.
+- 90-99: Excellent code, at most 1 trivial nitpick, no bugs, no security issues
+- 75-89: Good code, a few small suggestions, no bugs or security issues
+- 50-74: Moderate issues — missing error handling, minor bugs, or unclear logic
+- 25-49: Real bugs present, multiple issues, needs significant work
+- 1-24: Critical security vulnerabilities or severe bugs found
+- NEVER give 100 if you wrote anything in Suggestions section
+- NEVER give 100 if you wrote anything in Bugs section
+- NEVER give above 92 for markdown, config, or text-only files
+- Most real-world PRs should score between 62-88
+- Give exact numbers like 67, 73, 81, 88 — not just round numbers like 70, 80, 90
+>>>>>>> test/clean-v2
 Be specific with filenames and line numbers."""
 
     review_text = call_llm(prompt)
+
+    # ── Extract score ─────────────────────────────────────
     score = 70
     match = re.search(r"Health Score:\s*(\d+)", review_text)
     if match:
         score = int(match.group(1))
+<<<<<<< HEAD
         # Calibrate — markdown-only PRs shouldn't get 100, cap at 97
         code_extensions = ['.py', '.js', '.ts', '.java', '.go', '.rb', '.cpp']
         has_code = any(f.endswith(tuple(code_extensions)) for f in file_list)
         if not has_code and score == 100:
             score = 97
+=======
+
+    # ── Force variation — override lazy model scores ──────
+    code_extensions = ['.py', '.js', '.ts', '.java', '.go', '.rb', '.cpp', '.c', '.cs', '.jsx', '.tsx']
+    has_code = any(f.endswith(tuple(code_extensions)) for f in file_list)
+
+    review_lower = review_text.lower()
+
+    # Check each section for actual content vs "none found"
+    has_critical = (
+        "critical" in review_lower and
+        "none found" not in (review_lower.split("critical issues")[1][:150] if "critical issues" in review_lower else "none found")
+    )
+    has_bugs = (
+        "bugs" in review_lower and
+        "none found" not in (review_lower.split("bugs")[1][:150] if "bugs" in review_lower else "none found")
+    )
+    has_suggestions = (
+        "suggestions" in review_lower and
+        "none" not in (review_lower.split("suggestions")[1][:150] if "suggestions" in review_lower else "none")
+    )
+
+    # Override 100 — it should almost never be given
+    if score == 100:
+        if has_critical:
+            score = 12
+        elif has_bugs:
+            score = 48
+        elif has_suggestions and has_code:
+            score = 81
+        elif has_suggestions and not has_code:
+            score = 88
+        elif not has_code:
+            score = 91  # clean markdown/config
+        else:
+            score = 94  # genuinely clean code, no suggestions
+
+    # Override other round numbers to feel more precise
+    round_number_map = {90: 88, 80: 79, 70: 71, 60: 63, 50: 53, 40: 42, 30: 33, 20: 18, 10: 9}
+    if score in round_number_map and score != 0:
+        score = round_number_map[score]
+
+    # Final clamp
+    score = max(0, min(100, score))
+>>>>>>> test/clean-v2
     return review_text, score
 
 # ── Main ─────────────────────────────────────────────────
