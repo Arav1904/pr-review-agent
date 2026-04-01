@@ -210,34 +210,47 @@ def ensure_labels_exist(repo_full):
 
 def apply_labels(repo_full, pr_number, review_text, score):
     ensure_labels_exist(repo_full)
-    labels = []
-    review_lower = review_text.lower()
-
-    # Remove all existing bot labels first
-    existing_url = f"https://api.github.com/repos/{repo_full}/issues/{pr_number}/labels"
-    existing_resp = requests.get(existing_url, headers=get_headers())
-    if existing_resp.status_code == 200:
-        for label in existing_resp.json():
-            if label["name"] in ["lgtm", "needs-changes", "security-risk"]:
-                requests.delete(
-                    f"https://api.github.com/repos/{repo_full}/issues/{pr_number}/labels/{label['name']}",
-                    headers=get_headers()
-                )
-
-    # Apply correct labels
-    is_security = "critical" in review_lower or "🔒" in review_text or "security" in review_lower
     
-    if is_security:
-        labels = ["security-risk", "needs-changes"]
-    elif score >= 80:
-        labels = ["lgtm"]
+    bot_labels = ["lgtm", "needs-changes", "security-risk"]
+    
+    # Step 1 — Remove each bot label individually
+    for label in bot_labels:
+        encoded = label.replace("-", "%2D")
+        url = f"https://api.github.com/repos/{repo_full}/issues/{pr_number}/labels/{label}"
+        resp = requests.delete(url, headers=get_headers())
+        print(f"🗑️  Removed label '{label}': {resp.status_code}")
+    
+    time.sleep(2)
+    
+    # Step 2 — Determine correct labels
+    review_lower = review_text.lower()
+    
+    # Check if CRITICAL section actually has issues
+    critical_section = ""
+    if "critical issues" in review_lower:
+        parts = review_lower.split("critical issues")
+        if len(parts) > 1:
+            critical_section = parts[1][:200]
+    
+    has_security = (
+        "critical issues" in review_lower and
+        "none found" not in critical_section
+    )
+    
+    if has_security:
+        new_labels = ["security-risk", "needs-changes"]
+    elif score >= 85:
+        new_labels = ["lgtm"]
     else:
-        labels = ["needs-changes"]
-
+        new_labels = ["needs-changes"]
+    
+    # Step 3 — Apply fresh labels
     url  = f"https://api.github.com/repos/{repo_full}/issues/{pr_number}/labels"
-    resp = requests.post(url, headers=get_headers(), json={"labels": labels})
+    resp = requests.post(url, headers=get_headers(), json={"labels": new_labels})
     if resp.status_code == 200:
-        print(f"🏷️  Labels: {labels}")
+        print(f"🏷️  Labels applied: {new_labels}")
+    else:
+        print(f"⚠️  Label apply failed: {resp.status_code} — {resp.text}")
         
 # ── Generate review ───────────────────────────────────────
 def generate_review(diff_text, file_list, config=None, memory=""):
@@ -315,6 +328,11 @@ Be specific with filenames and line numbers."""
     match = re.search(r"Health Score:\s*(\d+)", review_text)
     if match:
         score = int(match.group(1))
+        # Calibrate — markdown-only PRs shouldn't get 100, cap at 97
+        code_extensions = ['.py', '.js', '.ts', '.java', '.go', '.rb', '.cpp']
+        has_code = any(f.endswith(tuple(code_extensions)) for f in file_list)
+        if not has_code and score == 100:
+            score = 97
     return review_text, score
 
 # ── Main ─────────────────────────────────────────────────
