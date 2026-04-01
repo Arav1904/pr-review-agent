@@ -212,17 +212,33 @@ def apply_labels(repo_full, pr_number, review_text, score):
     ensure_labels_exist(repo_full)
     labels = []
     review_lower = review_text.lower()
-    if score >= 80:
-        labels.append("lgtm")
+
+    # Remove all existing bot labels first
+    existing_url = f"https://api.github.com/repos/{repo_full}/issues/{pr_number}/labels"
+    existing_resp = requests.get(existing_url, headers=get_headers())
+    if existing_resp.status_code == 200:
+        for label in existing_resp.json():
+            if label["name"] in ["lgtm", "needs-changes", "security-risk"]:
+                requests.delete(
+                    f"https://api.github.com/repos/{repo_full}/issues/{pr_number}/labels/{label['name']}",
+                    headers=get_headers()
+                )
+
+    # Apply correct labels
+    is_security = "critical" in review_lower or "🔒" in review_text or "security" in review_lower
+    
+    if is_security:
+        labels = ["security-risk", "needs-changes"]
+    elif score >= 80:
+        labels = ["lgtm"]
     else:
-        labels.append("needs-changes")
-    if "critical" in review_lower or "🔒" in review_text or "security" in review_lower:
-        labels.append("security-risk")
+        labels = ["needs-changes"]
+
     url  = f"https://api.github.com/repos/{repo_full}/issues/{pr_number}/labels"
     resp = requests.post(url, headers=get_headers(), json={"labels": labels})
     if resp.status_code == 200:
         print(f"🏷️  Labels: {labels}")
-
+        
 # ── Generate review ───────────────────────────────────────
 def generate_review(diff_text, file_list, config=None, memory=""):
     if config is None:
