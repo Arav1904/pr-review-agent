@@ -321,20 +321,6 @@ Diff:
 ```diff
 {diff_text}
 ```
-<<<<<<< HEAD
-CRITICAL SCORING RULES — follow exactly, do not give lazy round numbers:
-- 100: Reserved for absolutely perfect code — zero issues, zero suggestions possible. Extremely rare.
-- 90-99: Excellent code, at most 1 trivial nitpick, no bugs
-- 75-89: Good code, small suggestions, no bugs
-- 50-74: Moderate issues, missing error handling
-- 25-49: Real bugs present, needs significant work
-- 1-24: Critical security vulnerabilities found
-- NEVER give 100 if you wrote anything in Suggestions section
-- NEVER give 100 if you wrote anything in Bugs section
-- NEVER give above 92 for markdown or text-only files
-- Most real PRs should score between 62-88
-- Give exact numbers like 67, 73, 81 — not round numbers like 70, 80, 90
-=======
 
 CRITICAL SCORING RULES — follow exactly, do not give lazy round numbers:
 - 100: Reserved for absolutely perfect code — zero issues, zero suggestions, zero improvements possible. Extremely rare.
@@ -348,7 +334,6 @@ CRITICAL SCORING RULES — follow exactly, do not give lazy round numbers:
 - NEVER give above 92 for markdown, config, or text-only files
 - Most real-world PRs should score between 62-88
 - Give exact numbers like 67, 73, 81, 88 — not just round numbers like 70, 80, 90
->>>>>>> test/clean-v2
 Be specific with filenames and line numbers."""
 
     review_text = call_llm(prompt)
@@ -358,13 +343,6 @@ Be specific with filenames and line numbers."""
     match = re.search(r"Health Score:\s*(\d+)", review_text)
     if match:
         score = int(match.group(1))
-<<<<<<< HEAD
-        # Calibrate — markdown-only PRs shouldn't get 100, cap at 97
-        code_extensions = ['.py', '.js', '.ts', '.java', '.go', '.rb', '.cpp']
-        has_code = any(f.endswith(tuple(code_extensions)) for f in file_list)
-        if not has_code and score == 100:
-            score = 97
-=======
 
     # ── Force variation — override lazy model scores ──────
     code_extensions = ['.py', '.js', '.ts', '.java', '.go', '.rb', '.cpp', '.c', '.cs', '.jsx', '.tsx']
@@ -408,7 +386,6 @@ Be specific with filenames and line numbers."""
 
     # Final clamp
     score = max(0, min(100, score))
->>>>>>> test/clean-v2
     return review_text, score
 
 # ── Main ─────────────────────────────────────────────────
