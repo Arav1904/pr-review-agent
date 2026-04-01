@@ -2,6 +2,8 @@ import os
 import json
 import re
 import time
+import fnmatch
+import datetime
 import requests
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
@@ -9,9 +11,8 @@ GROQ_API_KEY   = os.environ.get("GROQ_API_KEY")
 GITHUB_TOKEN   = os.environ.get("GITHUB_TOKEN")
 EVENT_PATH     = os.environ.get("GITHUB_EVENT_PATH")
 
+# ── LLM caller with Gemini + Groq fallback ───────────────
 def call_llm(prompt):
-    """Try Gemini first, fall back to Groq if quota exceeded."""
-    # Try Gemini
     if GEMINI_API_KEY:
         try:
             from google import genai
@@ -26,9 +27,8 @@ def call_llm(prompt):
             if "429" in str(e):
                 print("⚠️  Gemini quota exhausted, falling back to Groq...")
             else:
-                print(f"⚠️  Gemini error: {e}, falling back to Groq...")
+                print(f"⚠️  Gemini error, falling back to Groq: {e}")
 
-    # Fall back to Groq
     if GROQ_API_KEY:
         headers = {
             "Authorization": f"Bearer {GROQ_API_KEY}",
@@ -49,11 +49,11 @@ def call_llm(prompt):
             print("✅ Used Groq fallback")
             return resp.json()["choices"][0]["message"]["content"]
         else:
-            raise Exception(f"Groq also failed: {resp.status_code} — {resp.text}")
+            raise Exception(f"Groq failed: {resp.status_code} — {resp.text}")
 
-    raise Exception("❌ No working LLM available — check API keys!")
+    raise Exception("❌ No working LLM — check API keys!")
 
-# ── Load agent files ──────────────────────────────────────
+# ── File loaders ─────────────────────────────────────────
 def load_file(path):
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -61,6 +61,42 @@ def load_file(path):
     except FileNotFoundError:
         return ""
 
+def load_config():
+    import yaml
+    defaults = {
+        "strictness": "medium",
+        "skip_drafts": True,
+        "max_diff_size": 15000,
+        "skip_labels": False,
+        "focus": {"security": True, "bugs": True, "performance": True, "style": False},
+        "skip_files": ["*.lock", "*.min.js"],
+        "custom_rules": []
+    }
+    try:
+        with open(".reviewbot.yml", "r") as f:
+            user_config = yaml.safe_load(f)
+            if user_config:
+                defaults.update(user_config)
+    except FileNotFoundError:
+        pass
+    return defaults
+
+def load_memory():
+    return load_file("memory/context.md")
+
+def update_memory(pr_number, score, critical_count):
+    os.makedirs("memory", exist_ok=True)
+    entry = (
+        f"\n## PR #{pr_number} — {datetime.date.today()}\n"
+        f"- Health Score: {score}/100\n"
+        f"- Critical issues: {critical_count}\n"
+    )
+    log_path = "memory/dailylog.md"
+    with open(log_path, "a", encoding="utf-8") as f:
+        f.write(entry)
+    print(f"🧠 Memory updated")
+
+# ── System prompt ─────────────────────────────────────────
 SOUL  = load_file("SOUL.md")
 RULES = load_file("RULES.md")
 SKILL = load_file("skills/pr-review/SKILL.md")
@@ -85,19 +121,10 @@ def get_pr_info():
     author    = pr.get("user", {}).get("login", "unknown")
 
     if is_draft:
-        print("📝 Draft PR detected — skipping full review")
         return repo_full, pr_number, "", True, title, author
 
-    headers   = get_headers()
-    diff_resp = requests.get(diff_url, headers=headers)
-    diff_text = diff_resp.text
-
-    too_large = False
-    if len(diff_text) > 15000:
-        print(f"⚠️  Large PR detected ({len(diff_text)} chars) — truncating")
-        diff_text = diff_text[:15000]
-        too_large = True
-
+    diff_resp = requests.get(diff_url, headers=get_headers())
+    diff_text = diff_resp.text[:15000]
     return repo_full, pr_number, diff_text, False, title, author
 
 def get_pr_files(repo_full, pr_number):
@@ -116,33 +143,70 @@ def find_existing_bot_comment(repo_full, pr_number):
                 return comment["id"]
     return None
 
-def post_or_update_comment(repo_full, pr_number, body):
-    from datetime import datetime, timezone
-    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+def extract_previous_score(repo_full, pr_number):
+    existing_id = find_existing_bot_comment(repo_full, pr_number)
+    if not existing_id:
+        return None
+    url  = f"https://api.github.com/repos/{repo_full}/issues/comments/{existing_id}"
+    resp = requests.get(url, headers=get_headers())
+    if resp.status_code == 200:
+        body = resp.json().get("body", "")
+        match = re.search(r"Health Score:\s*(\d+)", body)
+        if match:
+            return int(match.group(1))
+    return None
+
+def post_or_update_comment(repo_full, pr_number, body, current_score=None):
+    timestamp  = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    prev_score = extract_previous_score(repo_full, pr_number)
+
+    trend = ""
+    if prev_score is not None and current_score is not None:
+        diff = current_score - prev_score
+        if diff > 0:
+            trend = f" ⬆️ +{diff} pts from last review"
+        elif diff < 0:
+            trend = f" ⬇️ {diff} pts from last review"
+        else:
+            trend = " ➡️ No change from last review"
+
     footer = (
         f"\n\n---\n"
-        f"*🤖 ReviewBot powered by [GitAgent](https://gitagent.sh) + Gemini 2.0 — "
-        f"Last run: {timestamp} — "
-        f"Push a new commit to re-trigger.*"
+        f"*🤖 ReviewBot v2.0 — [GitAgent](https://gitagent.sh) + Gemini/Groq"
+        f"{trend} — {timestamp} — Push a commit to re-trigger.*"
     )
-    full_body = body + footer
-
+    full_body  = body + footer
     existing_id = find_existing_bot_comment(repo_full, pr_number)
+
     if existing_id:
         url  = f"https://api.github.com/repos/{repo_full}/issues/comments/{existing_id}"
         resp = requests.patch(url, headers=get_headers(), json={"body": full_body})
         if resp.status_code == 200:
-            print("✅ Existing review comment updated!")
+            print(f"✅ Comment updated! Trend: {trend or 'first review'}")
         else:
             print(f"❌ Update failed: {resp.status_code}")
     else:
         url  = f"https://api.github.com/repos/{repo_full}/issues/{pr_number}/comments"
         resp = requests.post(url, headers=get_headers(), json={"body": full_body})
         if resp.status_code == 201:
-            print("✅ New review comment posted!")
+            print("✅ First review posted!")
         else:
-            print(f"❌ Post failed: {resp.status_code} — {resp.text}")
-            raise Exception(f"Failed to post comment: {resp.status_code}")
+            raise Exception(f"Post failed: {resp.status_code} — {resp.text}")
+
+def ensure_labels_exist(repo_full):
+    label_defs = [
+        {"name": "lgtm",          "color": "0e8a16", "description": "Looks good to merge"},
+        {"name": "needs-changes", "color": "e11d48", "description": "Changes requested by ReviewBot"},
+        {"name": "security-risk", "color": "b91c1c", "description": "Security issue detected"},
+    ]
+    url      = f"https://api.github.com/repos/{repo_full}/labels"
+    existing = []
+    resp     = requests.get(url, headers=get_headers())
+    if resp.status_code == 200:
+        existing = [l["name"] for l in resp.json()]
+    for label in label_defs:
+        if label["name"] not in existing:
+            requests.post(url, headers=get_headers(), json=label)
 
 def apply_labels(repo_full, pr_number, review_text, score):
     ensure_labels_exist(repo_full)
@@ -152,42 +216,48 @@ def apply_labels(repo_full, pr_number, review_text, score):
         labels.append("lgtm")
     else:
         labels.append("needs-changes")
-    if "critical" in review_lower or "security" in review_lower or "🔒" in review_text:
+    if "critical" in review_lower or "🔒" in review_text or "security" in review_lower:
         labels.append("security-risk")
-
     url  = f"https://api.github.com/repos/{repo_full}/issues/{pr_number}/labels"
     resp = requests.post(url, headers=get_headers(), json={"labels": labels})
     if resp.status_code == 200:
-        print(f"🏷️  Labels applied: {labels}")
-    else:
-        print(f"⚠️  Label apply failed: {resp.status_code}")
+        print(f"🏷️  Labels: {labels}")
 
-def ensure_labels_exist(repo_full):
-    label_defs = [
-        {"name": "lgtm",          "color": "0e8a16", "description": "Looks good to merge"},
-        {"name": "needs-changes", "color": "e11d48", "description": "Changes requested by ReviewBot"},
-        {"name": "security-risk", "color": "b91c1c", "description": "Security issue detected by ReviewBot"},
-    ]
-    url = f"https://api.github.com/repos/{repo_full}/labels"
-    existing_resp = requests.get(url, headers=get_headers())
-    existing = [l["name"] for l in existing_resp.json()] if existing_resp.status_code == 200 else []
-    for label in label_defs:
-        if label["name"] not in existing:
-            requests.post(url, headers=get_headers(), json=label)
-
-# ── Gemini review ─────────────────────────────────────────
-def generate_review(diff_text, file_list):
+# ── Generate review ───────────────────────────────────────
+def generate_review(diff_text, file_list, config=None, memory=""):
+    if config is None:
+        config = {}
     if not diff_text.strip():
         return "## 🤖 ReviewBot\nNo code changes detected — nothing to review.", 100
 
-    files_str = "\n".join(f"- {f}" for f in file_list) if file_list else "Unknown"
+    strictness = config.get("strictness", "medium")
+    focus      = config.get("focus", {})
+    custom_rules = config.get("custom_rules", [])
+    files_str  = "\n".join(f"- {f}" for f in file_list) if file_list else "Unknown"
+
+    strictness_guide = {
+        "low":    "Only flag critical bugs and security issues. Skip minor style issues.",
+        "medium": "Balance thoroughness. Flag bugs, security, and important suggestions.",
+        "high":   "Be thorough. Flag everything including style and minor improvements."
+    }.get(strictness, "Balance thoroughness.")
+
+    custom_rules_str = ""
+    if custom_rules:
+        custom_rules_str = "\nCustom rules:\n" + "\n".join(f"- {r}" for r in custom_rules)
+
+    memory_str = f"\nProject context:\n{memory[:800]}" if memory else ""
 
     prompt = f"""{SYSTEM_PROMPT}
+{memory_str}
+{custom_rules_str}
 
-You are reviewing a Pull Request. Here are the files changed:
+Strictness: {strictness} — {strictness_guide}
+Focus: Security={focus.get('security',True)}, Bugs={focus.get('bugs',True)}, Performance={focus.get('performance',True)}, Style={focus.get('style',False)}
+
+Files changed:
 {files_str}
 
-Review the following diff carefully and respond in this EXACT format:
+Respond in EXACTLY this format:
 
 ## 🤖 ReviewBot Summary
 **Health Score: [0-100]/100**
@@ -196,82 +266,80 @@ Review the following diff carefully and respond in this EXACT format:
 ---
 
 ### 🔒 CRITICAL Issues
-[List any security issues, hardcoded secrets, injection risks. Write "None found." if clean.]
+[Security issues. Write "None found." if clean.]
 
 ---
 
 ### 🐛 HIGH — Bugs & Logic Errors
-[List bugs, wrong logic, unhandled exceptions. Write "None found." if clean.]
+[Bugs and logic errors. Write "None found." if clean.]
 
 ---
 
 ### 💡 MEDIUM — Suggestions
-[Performance, readability, missing error handling improvements.]
+[Improvements and suggestions.]
 
 ---
 
 ### ✅ What's Done Well
-[Acknowledge good patterns and clean code.]
+[Acknowledge good patterns.]
 
 ---
 
 ### 📁 Per-File Notes
-[Brief note per changed file if relevant.]
+[One line per file.]
 
-Here is the diff to review:
+Diff:
 ```diff
 {diff_text}
 ```
+Be specific with filenames and line numbers."""
 
-Remember: Health Score 0-100 where 100 is perfect code."""
-
-    # Retry up to 3 times on quota errors
-    import time
-    for attempt in range(3):
-        try:
-            review_text = call_llm(prompt)
-            score = 70
-            match = re.search(r"Health Score:\s*(\d+)", review_text)
-            if match:
-                score = int(match.group(1))
-            return review_text, score
-
-        except Exception as e:
-            if "429" in str(e) and attempt < 2:
-                wait = 35 * (attempt + 1)
-                print(f"⏳ Quota hit, waiting {wait}s before retry {attempt + 2}/3...")
-                time.sleep(wait)
-            else:
-                raise
+    review_text = call_llm(prompt)
+    score = 70
+    match = re.search(r"Health Score:\s*(\d+)", review_text)
+    if match:
+        score = int(match.group(1))
+    return review_text, score
 
 # ── Main ─────────────────────────────────────────────────
 if __name__ == "__main__":
-    print("🤖 ReviewBot starting...")
+    print("🤖 ReviewBot v2.0 starting...")
 
-    if not GEMINI_API_KEY:
-        raise Exception("❌ GEMINI_API_KEY secret is missing!")
     if not GITHUB_TOKEN:
-        raise Exception("❌ GITHUB_TOKEN is missing!")
+        raise Exception("❌ GITHUB_TOKEN missing!")
+
+    config = load_config()
+    print(f"⚙️  Strictness: {config['strictness']}")
 
     repo_full, pr_number, diff_text, is_draft, title, author = get_pr_info()
-    print(f"📋 Reviewing PR #{pr_number} in {repo_full}")
+    print(f"📋 PR #{pr_number} '{title}' by @{author}")
 
-    if is_draft:
-        draft_msg = (
+    if is_draft and config.get("skip_drafts", True):
+        msg = (
             "## 🤖 ReviewBot\n"
-            "⏭️ **Draft PR detected** — I'll review this when you mark it ready for review.\n\n"
-            "*Remove draft status to trigger a full review.*"
+            "⏭️ **Draft PR** — I'll review when you mark ready for review."
         )
-        post_or_update_comment(repo_full, pr_number, draft_msg)
+        post_or_update_comment(repo_full, pr_number, msg)
         print("✅ Draft notice posted.")
     else:
-        print(f"📏 Diff size: {len(diff_text)} characters")
+        print(f"📏 Diff: {len(diff_text)} chars")
         file_list = get_pr_files(repo_full, pr_number)
-        print(f"📂 Files changed: {file_list}")
 
-        review, score = generate_review(diff_text, file_list)
-        print(f"📊 Health Score: {score}/100")
+        skip_patterns = config.get("skip_files", [])
+        filtered = [f for f in file_list if not any(fnmatch.fnmatch(f, p) for p in skip_patterns)]
+        skipped  = len(file_list) - len(filtered)
+        if skipped:
+            print(f"⏭️  Skipping {skipped} files per config")
+        print(f"📂 Reviewing: {filtered}")
 
-        post_or_update_comment(repo_full, pr_number, review)
-        apply_labels(repo_full, pr_number, review, score)
+        memory = load_memory()
+        review, score = generate_review(diff_text, filtered, config, memory)
+        print(f"📊 Score: {score}/100")
+
+        post_or_update_comment(repo_full, pr_number, review, score)
+
+        if not config.get("skip_labels", False):
+            apply_labels(repo_full, pr_number, review, score)
+
+        update_memory(pr_number, score, review.lower().count("critical"))
         print("🎉 Done!")

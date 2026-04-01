@@ -40,7 +40,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install google-genai requests
+        run: pip install google-genai requests pyyaml
 
       - name: Run PR Review Agent
         env:

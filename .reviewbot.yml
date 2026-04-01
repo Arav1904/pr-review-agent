@@ -1,0 +1,21 @@
+strictness: medium
+skip_drafts: true
+max_diff_size: 15000
+skip_labels: false
+
+focus:
+  security: true
+  bugs: true
+  performance: true
+  style: false
+
+skip_files:
+  - "*.lock"
+  - "*.min.js"
+  - "migrations/*"
+  - "TEST.md"
+
+custom_rules:
+  - "Flag any hardcoded credentials or API keys"
+  - "Flag use of eval() or exec() on user input"
+  - "Check for missing input validation on functions"
