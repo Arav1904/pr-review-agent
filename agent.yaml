@@ -1,8 +1,10 @@
 name: pr-review-agent
-version: "1.0.0"
+version: "2.0.0"
 description: >
   An AI agent that lives in your git repo and automatically reviews
   every Pull Request for bugs, security issues, style, and improvements.
+  Posts structured reviews with health scores, auto-labels PRs, and
+  updates existing comments instead of spamming new ones.
 
 identity:
   soul: SOUL.md
@@ -10,8 +12,8 @@ identity:
   duties: DUTIES.md
 
 model:
-  default: gemini-2.0-flash-exp
-  fallback: gpt-4o
+  default: gemini-2.0-flash-lite
+  fallback: gemini-2.0-flash
 
 skills:
   - path: skills/pr-review
@@ -22,11 +24,18 @@ tools:
 workflows:
   - path: workflows/review.yaml
 
+features:
+  - health_score: true
+  - auto_labeling: true
+  - comment_deduplication: true
+  - per_file_breakdown: true
+
 compliance:
   open_source: true
   license: MIT
+  segregation_of_duties: true
 
 metadata:
   author: your-github-username
   repo: https://github.com/your-username/pr-review-agent
-  tags: [code-review, automation, github, pull-request, devtools]
+  tags: [code-review, automation, github, pull-request, devtools, gitagent]
