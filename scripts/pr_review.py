@@ -50,7 +50,7 @@ def generate_review(diff_text):
     prompt = f"{SYSTEM_PROMPT}\n\nReview this PR diff:\n\n```diff\n{diff_text}\n```"
 
     response = client.models.generate_content(
-        model="gemini-2.0-flash",
+        model="gemini-2.0-flash-lite",
         contents=prompt
     )
     return response.text
