@@ -1,3 +1,7 @@
+﻿"""
+PR Review Agent v3 — GitAgent Standard
+Powered by Gemini + Groq | Full diagnostics, code fixes, insights
+"""
 import os
 import json
 import re
@@ -11,8 +15,8 @@ GROQ_API_KEY   = os.environ.get("GROQ_API_KEY")
 GITHUB_TOKEN   = os.environ.get("GITHUB_TOKEN")
 EVENT_PATH     = os.environ.get("GITHUB_EVENT_PATH")
 
-# ── LLM caller with Gemini + Groq fallback ───────────────
-def call_llm(prompt):
+# ── LLM caller — Gemini first, Groq fallback ─────────────
+def call_llm(prompt: str) -> str:
     if GEMINI_API_KEY:
         try:
             from google import genai
@@ -24,10 +28,7 @@ def call_llm(prompt):
             print("✅ Used Gemini")
             return response.text
         except Exception as e:
-            if "429" in str(e):
-                print("⚠️  Gemini quota exhausted, falling back to Groq...")
-            else:
-                print(f"⚠️  Gemini error, falling back to Groq: {e}")
+            print(f"⚠️  Gemini error ({e.__class__.__name__}), trying Groq...")
 
     if GROQ_API_KEY:
         headers = {
@@ -37,82 +38,85 @@ def call_llm(prompt):
         payload = {
             "model": "llama-3.3-70b-versatile",
             "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 2000,
+            "max_tokens": 3000,
             "temperature": 0.3
         }
-        resp = requests.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers=headers,
-            json=payload
-        )
-        if resp.status_code == 200:
-            print("✅ Used Groq fallback")
-            return resp.json()["choices"][0]["message"]["content"]
-        else:
-            raise Exception(f"Groq failed: {resp.status_code} — {resp.text}")
+        for attempt in range(3):
+            resp = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers=headers, json=payload
+            )
+            if resp.status_code == 200:
+                print("✅ Used Groq fallback")
+                return resp.json()["choices"][0]["message"]["content"]
+            elif resp.status_code == 429:
+                wait = 30 * (attempt + 1)
+                print(f"⏳ Groq rate limit, waiting {wait}s...")
+                time.sleep(wait)
+            else:
+                raise Exception(f"Groq failed: {resp.status_code} — {resp.text}")
 
-    raise Exception("❌ No working LLM — check API keys!")
+    raise Exception("❌ No working LLM — check API keys in GitHub Secrets!")
 
-# ── File loaders ─────────────────────────────────────────
-def load_file(path):
+# ── File helpers ──────────────────────────────────────────
+def load_file(path: str) -> str:
     try:
         with open(path, "r", encoding="utf-8") as f:
             return f.read()
     except FileNotFoundError:
         return ""
 
-def load_config():
-    import yaml
-    defaults = {
-        "strictness": "medium",
-        "skip_drafts": True,
-        "max_diff_size": 15000,
-        "skip_labels": False,
-        "focus": {"security": True, "bugs": True, "performance": True, "style": False},
-        "skip_files": ["*.lock", "*.min.js"],
-        "custom_rules": []
-    }
+def load_config() -> dict:
     try:
+        import yaml
         with open(".reviewbot.yml", "r") as f:
-            user_config = yaml.safe_load(f)
-            if user_config:
-                defaults.update(user_config)
-    except FileNotFoundError:
-        pass
-    return defaults
+            cfg = yaml.safe_load(f)
+            return cfg if cfg else {}
+    except Exception:
+        return {}
 
-def load_memory():
+def load_memory() -> str:
     return load_file("memory/context.md")
 
-def update_memory(pr_number, score, critical_count):
+def update_memory(pr_number: int, score: int, critical_count: int) -> None:
     os.makedirs("memory", exist_ok=True)
     entry = (
         f"\n## PR #{pr_number} — {datetime.date.today()}\n"
         f"- Health Score: {score}/100\n"
-        f"- Critical issues: {critical_count}\n"
+        f"- Critical issues found: {critical_count}\n"
     )
-    log_path = "memory/dailylog.md"
-    with open(log_path, "a", encoding="utf-8") as f:
+    with open("memory/dailylog.md", "a", encoding="utf-8") as f:
         f.write(entry)
-    print(f"🧠 Memory updated")
+    print("🧠 Memory updated")
 
 # ── System prompt ─────────────────────────────────────────
-SOUL  = load_file("SOUL.md")
-RULES = load_file("RULES.md")
-SKILL = load_file("skills/pr-review/SKILL.md")
-SYSTEM_PROMPT = f"{SOUL}\n\n---\n\n{RULES}\n\n---\n\n{SKILL}"
+SOUL   = load_file("SOUL.md")
+RULES  = load_file("RULES.md")
+SKILL  = load_file("skills/pr-review/SKILL.md")
+SYSTEM = f"{SOUL}\n\n---\n\n{RULES}\n\n---\n\n{SKILL}"
 
 # ── GitHub helpers ────────────────────────────────────────
-def get_headers():
+def gh_headers() -> dict:
     return {
         "Authorization": f"Bearer {GITHUB_TOKEN}",
         "Accept": "application/vnd.github+json"
     }
 
-def get_pr_info():
+def get_pr_info() -> tuple:
     with open(EVENT_PATH, "r") as f:
         event = json.load(f)
-    pr        = event["pull_request"]
+
+    # Support both pull_request and issue_comment events
+    if "pull_request" in event:
+        pr = event["pull_request"]
+    elif "issue" in event:
+        pr_url = event["issue"].get("pull_request", {}).get("url", "")
+        if not pr_url:
+            raise Exception("Not a PR comment")
+        pr = requests.get(pr_url, headers=gh_headers()).json()
+    else:
+        raise Exception("Unknown event type")
+
     pr_number = pr["number"]
     repo_full = event["repository"]["full_name"]
     diff_url  = pr["diff_url"]
@@ -123,322 +127,361 @@ def get_pr_info():
     if is_draft:
         return repo_full, pr_number, "", True, title, author
 
-    diff_resp = requests.get(diff_url, headers=get_headers())
-    diff_text = diff_resp.text[:15000]
+    diff_resp = requests.get(diff_url, headers=gh_headers())
+    diff_text = diff_resp.text
+
+    too_large = len(diff_text) > 15000
+    if too_large:
+        diff_text = diff_text[:15000]
+        print(f"⚠️  Large diff truncated to 15000 chars")
+
     return repo_full, pr_number, diff_text, False, title, author
 
-def get_pr_files(repo_full, pr_number):
+def get_pr_files(repo_full: str, pr_number: int) -> list:
     url  = f"https://api.github.com/repos/{repo_full}/pulls/{pr_number}/files"
-    resp = requests.get(url, headers=get_headers())
+    resp = requests.get(url, headers=gh_headers())
     if resp.status_code == 200:
-        return [f["filename"] for f in resp.json()]
+        return resp.json()
     return []
 
-def find_existing_bot_comment(repo_full, pr_number):
+def get_file_content(repo_full: str, filename: str, pr_number: int) -> str:
+    """Fetch raw content of a file in the PR head."""
+    url  = f"https://api.github.com/repos/{repo_full}/pulls/{pr_number}/files"
+    resp = requests.get(url, headers=gh_headers())
+    if resp.status_code != 200:
+        return ""
+    for f in resp.json():
+        if f["filename"] == filename and "raw_url" in f:
+            raw = requests.get(f["raw_url"], headers=gh_headers())
+            return raw.text[:5000]
+    return ""
+
+def find_bot_comment(repo_full: str, pr_number: int) -> int:
     url  = f"https://api.github.com/repos/{repo_full}/issues/{pr_number}/comments"
-    resp = requests.get(url, headers=get_headers())
+    resp = requests.get(url, headers=gh_headers())
     if resp.status_code == 200:
-        for comment in resp.json():
-            if "🤖 ReviewBot" in comment.get("body", ""):
-                return comment["id"]
-    return None
+        for c in resp.json():
+            if "ReviewBot" in c.get("body", ""):
+                return c["id"]
+    return 0
 
-def extract_previous_score(repo_full, pr_number):
-    existing_id = find_existing_bot_comment(repo_full, pr_number)
-    if not existing_id:
-        return None
-    url  = f"https://api.github.com/repos/{repo_full}/issues/comments/{existing_id}"
-    resp = requests.get(url, headers=get_headers())
+def get_previous_score(repo_full: str, pr_number: int) -> int:
+    cid = find_bot_comment(repo_full, pr_number)
+    if not cid:
+        return -1
+    url  = f"https://api.github.com/repos/{repo_full}/issues/comments/{cid}"
+    resp = requests.get(url, headers=gh_headers())
     if resp.status_code == 200:
-        body = resp.json().get("body", "")
-        match = re.search(r"Health Score:\s*(\d+)", body)
-        if match:
-            return int(match.group(1))
-    return None
+        m = re.search(r"Health Score:\s*(\d+)", resp.json().get("body", ""))
+        if m:
+            return int(m.group(1))
+    return -1
 
-def post_or_update_comment(repo_full, pr_number, body, current_score=None):
+def post_or_update_comment(repo_full: str, pr_number: int, body: str, score: int) -> None:
     timestamp  = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    prev_score = extract_previous_score(repo_full, pr_number)
+    prev_score = get_previous_score(repo_full, pr_number)
 
     trend = ""
-    if prev_score is not None and current_score is not None:
-        diff = current_score - prev_score
+    if prev_score >= 0 and score >= 0:
+        diff = score - prev_score
         if diff > 0:
-            trend = f" ⬆️ +{diff} pts from last review"
+            trend = f" | Score improved +{diff} pts from last review"
         elif diff < 0:
-            trend = f" ⬇️ {diff} pts from last review"
+            trend = f" | Score dropped {diff} pts from last review"
         else:
-            trend = " ➡️ No change from last review"
+            trend = " | No score change from last review"
 
     footer = (
         f"\n\n---\n"
-        f"*🤖 ReviewBot v2.0 — [GitAgent](https://gitagent.sh) + Gemini/Groq"
-        f"{trend} — {timestamp} — Push a commit to re-trigger.*"
+        f"*[ReviewBot v3](https://github.com/Arav1904/pr-review-agent) "
+        f"powered by [GitAgent](https://gitagent.sh) + Gemini/Groq"
+        f"{trend} — {timestamp}*"
     )
-    full_body  = body + footer
-    existing_id = find_existing_bot_comment(repo_full, pr_number)
+    full_body = body + footer
+    cid = find_bot_comment(repo_full, pr_number)
 
-    if existing_id:
-        url  = f"https://api.github.com/repos/{repo_full}/issues/comments/{existing_id}"
-        resp = requests.patch(url, headers=get_headers(), json={"body": full_body})
-        if resp.status_code == 200:
-            print(f"✅ Comment updated! Trend: {trend or 'first review'}")
-        else:
-            print(f"❌ Update failed: {resp.status_code}")
+    if cid:
+        url  = f"https://api.github.com/repos/{repo_full}/issues/comments/{cid}"
+        resp = requests.patch(url, headers=gh_headers(), json={"body": full_body})
+        print(f"{'✅' if resp.status_code == 200 else '❌'} Comment updated (trend: {trend or 'first'})")
     else:
         url  = f"https://api.github.com/repos/{repo_full}/issues/{pr_number}/comments"
-        resp = requests.post(url, headers=get_headers(), json={"body": full_body})
-        if resp.status_code == 201:
-            print("✅ First review posted!")
-        else:
+        resp = requests.post(url, headers=gh_headers(), json={"body": full_body})
+        if resp.status_code != 201:
             raise Exception(f"Post failed: {resp.status_code} — {resp.text}")
+        print("✅ First review comment posted!")
 
-def ensure_labels_exist(repo_full):
+def ensure_labels(repo_full: str) -> None:
     label_defs = [
-        {"name": "lgtm",          "color": "0e8a16", "description": "Looks good to merge"},
-        {"name": "needs-changes", "color": "e11d48", "description": "Changes requested by ReviewBot"},
-        {"name": "security-risk", "color": "b91c1c", "description": "Security issue detected"},
+        {"name": "lgtm",              "color": "0e8a16", "description": "Looks good to merge"},
+        {"name": "needs-changes",     "color": "e11d48", "description": "Changes requested by ReviewBot"},
+        {"name": "security-risk",     "color": "b91c1c", "description": "Security vulnerability detected"},
+        {"name": "performance-issue", "color": "f59e0b", "description": "Performance problems detected"},
+        {"name": "bug-detected",      "color": "dc2626", "description": "Bug found by ReviewBot"},
+        {"name": "good-practices",    "color": "059669", "description": "Excellent coding practices"},
+        {"name": "needs-tests",       "color": "7c3aed", "description": "Missing test coverage"},
+        {"name": "breaking-change",   "color": "991b1b", "description": "May break existing functionality"},
     ]
     url      = f"https://api.github.com/repos/{repo_full}/labels"
     existing = []
-    resp     = requests.get(url, headers=get_headers())
+    resp     = requests.get(url, headers=gh_headers())
     if resp.status_code == 200:
         existing = [l["name"] for l in resp.json()]
     for label in label_defs:
         if label["name"] not in existing:
-            requests.post(url, headers=get_headers(), json=label)
+            requests.post(url, headers=gh_headers(), json=label)
 
-def apply_labels(repo_full, pr_number, review_text, score):
-    ensure_labels_exist(repo_full)
-    
-    bot_labels = ["lgtm", "needs-changes", "security-risk"]
-    
-    # Step 1 — Remove each bot label individually
+def apply_labels(repo_full: str, pr_number: int, review_text: str, score: int) -> None:
+    ensure_labels(repo_full)
+    bot_labels = [
+        "lgtm", "needs-changes", "security-risk",
+        "performance-issue", "bug-detected", "good-practices",
+        "needs-tests", "breaking-change"
+    ]
+
+    # Remove all existing bot labels cleanly
     for label in bot_labels:
-        encoded = label.replace("-", "%2D")
         url = f"https://api.github.com/repos/{repo_full}/issues/{pr_number}/labels/{label}"
-        resp = requests.delete(url, headers=get_headers())
-        print(f"🗑️  Removed label '{label}': {resp.status_code}")
-    
-    time.sleep(2)
-    
-    # Step 2 — Determine correct labels
+        requests.delete(url, headers=gh_headers())
+    time.sleep(1)
+
     review_lower = review_text.lower()
-    
-    # Check if CRITICAL section actually has issues
-    critical_section = ""
-    if "critical issues" in review_lower:
-        parts = review_lower.split("critical issues")
-        if len(parts) > 1:
-            critical_section = parts[1][:200]
-    
-    has_security = (
-        "critical issues" in review_lower and
-        "none found" not in critical_section
-    )
-    
+
+    def section_has_issues(section_keyword: str) -> bool:
+        if section_keyword not in review_lower:
+            return False
+        idx = review_lower.find(section_keyword)
+        snippet = review_lower[idx:idx+300]
+        return "none found" not in snippet and "none." not in snippet
+
+    has_security     = section_has_issues("critical issues")
+    has_bugs         = section_has_issues("bugs & logic")
+    has_perf         = "performance" in review_lower and section_has_issues("medium")
+    has_no_tests     = "test" in review_lower and ("missing test" in review_lower or "no test" in review_lower or "add test" in review_lower)
+    has_breaking     = "breaking" in review_lower or "backward compat" in review_lower
+    is_excellent     = score >= 88
+
+    new_labels = []
+
     if has_security:
-        new_labels = ["security-risk", "needs-changes"]
-    elif score >= 85:
-        new_labels = ["lgtm"]
+        new_labels += ["security-risk", "needs-changes"]
+    elif has_bugs:
+        new_labels += ["bug-detected", "needs-changes"]
+    elif score < 80:
+        new_labels.append("needs-changes")
     else:
-        new_labels = ["needs-changes"]
-    
-    # Step 3 — Apply fresh labels
+        new_labels.append("lgtm")
+
+    if has_perf and "performance-issue" not in new_labels:
+        new_labels.append("performance-issue")
+    if has_no_tests and "needs-tests" not in new_labels:
+        new_labels.append("needs-tests")
+    if has_breaking and "breaking-change" not in new_labels:
+        new_labels.append("breaking-change")
+    if is_excellent and "lgtm" in new_labels:
+        new_labels.append("good-practices")
+
     url  = f"https://api.github.com/repos/{repo_full}/issues/{pr_number}/labels"
-    resp = requests.post(url, headers=get_headers(), json={"labels": new_labels})
-    if resp.status_code == 200:
-        print(f"🏷️  Labels applied: {new_labels}")
-    else:
-        print(f"⚠️  Label apply failed: {resp.status_code} — {resp.text}")
-        
-# ── Generate review ───────────────────────────────────────
-def generate_review(diff_text, file_list, config=None, memory=""):
-    if config is None:
-        config = {}
+    resp = requests.post(url, headers=gh_headers(), json={"labels": new_labels})
+    print(f"🏷️  Labels: {new_labels}" if resp.status_code == 200 else f"⚠️  Label failed: {resp.status_code}")
+
+# ── Core review generator ─────────────────────────────────
+def generate_review(diff_text: str, file_info: list, config: dict, memory: str) -> tuple:
     if not diff_text.strip():
         return "## 🤖 ReviewBot\nNo code changes detected — nothing to review.", 100
 
     strictness   = config.get("strictness", "medium")
     focus        = config.get("focus", {})
     custom_rules = config.get("custom_rules", [])
-    files_str    = "\n".join(f"- {f}" for f in file_list) if file_list else "Unknown"
+
+    filenames   = [f["filename"] for f in file_info]
+    files_str   = "\n".join(f"- {f['filename']} (+{f.get('additions',0)}/-{f.get('deletions',0)} lines)" for f in file_info)
+    custom_str  = "\nCustom rules:\n" + "\n".join(f"- {r}" for r in custom_rules) if custom_rules else ""
+    memory_str  = f"\nProject context:\n{memory[:800]}" if memory else ""
 
     strictness_guide = {
-        "low":    "Only flag critical bugs and security issues. Skip minor style issues.",
-        "medium": "Balance thoroughness. Flag bugs, security, and important suggestions.",
-        "high":   "Be thorough. Flag everything including style and minor improvements."
+        "low":    "Only flag critical bugs and security. Skip style.",
+        "medium": "Balance thoroughness. Flag bugs, security, key suggestions.",
+        "high":   "Be thorough. Flag everything including style."
     }.get(strictness, "Balance thoroughness.")
 
-    custom_rules_str = ""
-    if custom_rules:
-        custom_rules_str = "\nCustom rules:\n" + "\n".join(f"- {r}" for r in custom_rules)
-
-    memory_str = f"\nProject context:\n{memory[:800]}" if memory else ""
-
-    prompt = f"""{SYSTEM_PROMPT}
+    prompt = f"""{SYSTEM}
 {memory_str}
-{custom_rules_str}
+{custom_str}
 
 Strictness: {strictness} — {strictness_guide}
-Focus: Security={focus.get('security',True)}, Bugs={focus.get('bugs',True)}, Performance={focus.get('performance',True)}, Style={focus.get('style',False)}
+Focus — Security: {focus.get('security', True)}, Bugs: {focus.get('bugs', True)}, Performance: {focus.get('performance', True)}, Style: {focus.get('style', False)}
 
 Files changed:
 {files_str}
 
-Respond in EXACTLY this format:
+Respond in EXACTLY this format — every section is required:
 
-## 🤖 ReviewBot Summary
+## ReviewBot Summary
 **Health Score: [0-100]/100**
-**Files reviewed:** {len(file_list)} | **Verdict:** [Needs Changes / LGTM / Security Alert]
+**Files reviewed:** {len(filenames)} | **Verdict:** [Needs Changes / LGTM / Security Alert / Bug Alert]
 
 ---
 
-### 🔒 CRITICAL Issues
-[Security issues, hardcoded secrets, injection risks. Write "None found." if clean.]
+### Critical Issues
+[Security vulnerabilities, hardcoded secrets, injection risks. Write "None found." if clean.]
 
 ---
 
-### 🐛 HIGH — Bugs & Logic Errors
-[Bugs and logic errors. Write "None found." if clean.]
+### Bugs and Logic Errors
+[Logic errors, unhandled exceptions, wrong conditions. Write "None found." if clean.]
 
 ---
 
-### 💡 MEDIUM — Suggestions
-[Improvements and suggestions.]
+### Suggestions
+[Performance, readability, missing error handling. Be specific.]
 
 ---
 
-### ✅ What's Done Well
-[Acknowledge good patterns.]
+### What Is Done Well
+[Acknowledge clean patterns, good practices, well-structured code.]
 
 ---
 
-### 📁 Per-File Notes
-[One line per file.]
+### Code Fixes
+[For EVERY issue found above, provide the exact fix in this format:]
 
-Diff:
+**Fix 1 — [Issue name] in [filename]:**
+```python
+# BEFORE (problematic code)
+[show the bad code]
+
+# AFTER (fixed code)
+[show the corrected code]
+```
+*Why this matters: [1-2 sentence plain English explanation]*
+
+---
+
+### Key Insights
+[3-5 bullet points — important lessons and best practices the author should remember from this review, written in simple encouraging language]
+
+---
+
+### Per-File Summary
+[One line per file: filename — main observation and score contribution]
+
+Diff to review:
 ```diff
 {diff_text}
 ```
 
-CRITICAL SCORING RULES — follow exactly, do not give lazy round numbers:
-- 100: Reserved for absolutely perfect code — zero issues, zero suggestions, zero improvements possible. Extremely rare.
-- 90-99: Excellent code, at most 1 trivial nitpick, no bugs, no security issues
-- 75-89: Good code, a few small suggestions, no bugs or security issues
-- 50-74: Moderate issues — missing error handling, minor bugs, or unclear logic
-- 25-49: Real bugs present, multiple issues, needs significant work
-- 1-24: Critical security vulnerabilities or severe bugs found
-- NEVER give 100 if you wrote anything in Suggestions section
-- NEVER give 100 if you wrote anything in Bugs section
-- NEVER give above 92 for markdown, config, or text-only files
-- Most real-world PRs should score between 62-88
-- Give exact numbers like 67, 73, 81, 88 — not just round numbers like 70, 80, 90
-CRITICAL SCORING RULES � follow exactly, do not give lazy round numbers:
-- 100: Reserved for absolutely perfect code � zero issues, zero suggestions possible. Extremely rare.
-- 90-99: Excellent code, at most 1 trivial nitpick, no bugs, no security issues
-- 75-89: Good code, small suggestions, no bugs or security issues
-- 50-74: Moderate issues, missing error handling, minor bugs
-- 25-49: Real bugs present, needs significant work before merge
-- 1-24: Critical security vulnerabilities or severe bugs found
-- NEVER give 100 if you wrote anything in Suggestions section
-- NEVER give 100 if you wrote anything in Bugs section
-- NEVER give above 92 for markdown or text-only files
-- Most real PRs should score between 62-88
-- Give exact numbers like 67, 73, 81 � not round numbers like 70, 80, 90
-Be specific with filenames and line numbers."""
+SCORING RULES — be strict and precise:
+- 93-100: Flawless code, production-ready, exemplary patterns
+- 80-92: Clean code, minor suggestions only, no bugs
+- 65-79: Good structure but improvements needed
+- 45-64: Multiple issues, missing error handling, moderate bugs
+- 25-44: Real bugs, poor practices, significant rework needed
+- 10-24: Critical issues, serious bugs, unsafe code
+- 0-9: Severe security vulnerabilities, dangerous code
+
+Give exact numbers (67, 73, 81, 88) — not round numbers.
+NEVER give 100 if any suggestion exists.
+NEVER give above 91 for markdown/config files."""
 
     review_text = call_llm(prompt)
 
-    # ── Extract score ─────────────────────────────────────
+    # Extract score
     score = 70
-    match = re.search(r"Health Score:\s*(\d+)", review_text)
-    if match:
-        score = int(match.group(1))
+    m = re.search(r"Health Score:\s*(\d+)", review_text)
+    if m:
+        score = int(m.group(1))
 
-    # ── Force variation — override lazy model scores ──────
-    code_extensions = ['.py', '.js', '.ts', '.java', '.go', '.rb', '.cpp', '.c', '.cs', '.jsx', '.tsx']
-    has_code = any(f.endswith(tuple(code_extensions)) for f in file_list)
+    # Override lazy scores
+    code_exts = ('.py', '.js', '.ts', '.java', '.go', '.rb', '.cpp', '.c', '.cs', '.jsx', '.tsx')
+    has_code  = any(f["filename"].endswith(code_exts) for f in file_info)
 
-    review_lower = review_text.lower()
+    def section_has_content(keyword: str) -> bool:
+        lower = review_text.lower()
+        if keyword not in lower:
+            return False
+        idx = lower.find(keyword)
+        return "none found" not in lower[idx:idx+200]
 
-    # Check each section for actual content vs "none found"
-    has_critical = (
-        "critical" in review_lower and
-        "none found" not in (review_lower.split("critical issues")[1][:150] if "critical issues" in review_lower else "none found")
-    )
-    has_bugs = (
-        "bugs" in review_lower and
-        "none found" not in (review_lower.split("bugs")[1][:150] if "bugs" in review_lower else "none found")
-    )
-    has_suggestions = (
-        "suggestions" in review_lower and
-        "none" not in (review_lower.split("suggestions")[1][:150] if "suggestions" in review_lower else "none")
-    )
+    has_critical    = section_has_content("critical issues")
+    has_bugs        = section_has_content("bugs and logic")
+    has_suggestions = section_has_content("suggestions")
 
-    # Override 100 — it should almost never be given
     if score == 100:
         if has_critical:
-            score = 12
+            score = 8
         elif has_bugs:
-            score = 48
+            score = 31
         elif has_suggestions and has_code:
-            score = 81
-        elif has_suggestions and not has_code:
-            score = 88
-        elif not has_code:
-            score = 91  # clean markdown/config
+            score = 79
+        elif has_suggestions:
+            score = 87
+        elif has_code:
+            score = 94
         else:
-            score = 94  # genuinely clean code, no suggestions
+            score = 89
 
-    # Override other round numbers to feel more precise
-    round_number_map = {90: 88, 80: 79, 70: 71, 60: 63, 50: 53, 40: 42, 30: 33, 20: 18, 10: 9}
-    if score in round_number_map and score != 0:
-        score = round_number_map[score]
+    # Prevent boring round numbers
+    round_map = {90: 88, 80: 78, 70: 69, 60: 62, 50: 51, 40: 43, 30: 32, 20: 19, 10: 11}
+    if score in round_map:
+        score = round_map[score]
 
-    # Final clamp
     score = max(0, min(100, score))
     return review_text, score
 
-# ── Main ─────────────────────────────────────────────────
+# ── Manual trigger via comment ────────────────────────────
+def is_manual_trigger() -> bool:
+    if not EVENT_PATH:
+        return False
+    try:
+        with open(EVENT_PATH) as f:
+            event = json.load(f)
+        comment = event.get("comment", {}).get("body", "").strip().lower()
+        return comment in ["/review", "/reviewbot", "!review"]
+    except Exception:
+        return False
+
+# ── Main ──────────────────────────────────────────────────
 if __name__ == "__main__":
-    print("🤖 ReviewBot v2.0 starting...")
+    print("🤖 ReviewBot v3 starting...")
 
     if not GITHUB_TOKEN:
-        raise Exception("❌ GITHUB_TOKEN missing!")
+        raise Exception("GITHUB_TOKEN is missing!")
 
     config = load_config()
-    print(f"⚙️  Strictness: {config['strictness']}")
+    print(f"Config loaded — strictness: {config.get('strictness', 'medium')}")
 
     repo_full, pr_number, diff_text, is_draft, title, author = get_pr_info()
-    print(f"📋 PR #{pr_number} '{title}' by @{author}")
+    print(f"PR #{pr_number} '{title}' by @{author} in {repo_full}")
 
     if is_draft and config.get("skip_drafts", True):
         msg = (
-            "## 🤖 ReviewBot\n"
-            "⏭️ **Draft PR** — I'll review when you mark ready for review."
+            "## ReviewBot\n"
+            "Draft PR detected — review will run when you mark this ready for review.\n\n"
+            "Push the 'Ready for review' button to trigger a full analysis."
         )
-        post_or_update_comment(repo_full, pr_number, msg)
-        print("✅ Draft notice posted.")
+        post_or_update_comment(repo_full, pr_number, msg, -1)
+        print("Draft notice posted.")
     else:
-        print(f"📏 Diff: {len(diff_text)} chars")
-        file_list = get_pr_files(repo_full, pr_number)
+        print(f"Diff size: {len(diff_text)} chars")
+        file_info = get_pr_files(repo_full, pr_number)
 
+        # Filter skip_files from config
         skip_patterns = config.get("skip_files", [])
-        filtered = [f for f in file_list if not any(fnmatch.fnmatch(f, p) for p in skip_patterns)]
-        skipped  = len(file_list) - len(filtered)
+        filtered = [
+            f for f in file_info
+            if not any(fnmatch.fnmatch(f["filename"], p) for p in skip_patterns)
+        ]
+        skipped = len(file_info) - len(filtered)
         if skipped:
-            print(f"⏭️  Skipping {skipped} files per config")
-        print(f"📂 Reviewing: {filtered}")
+            print(f"Skipping {skipped} files per .reviewbot.yml")
+        print(f"Reviewing {len(filtered)} files: {[f['filename'] for f in filtered]}")
 
         memory = load_memory()
         review, score = generate_review(diff_text, filtered, config, memory)
-        print(f"📊 Score: {score}/100")
+        print(f"Health Score: {score}/100")
 
         post_or_update_comment(repo_full, pr_number, review, score)
-
-        if not config.get("skip_labels", False):
-            apply_labels(repo_full, pr_number, review, score)
-
+        apply_labels(repo_full, pr_number, review, score)
         update_memory(pr_number, score, review.lower().count("critical"))
-        print("🎉 Done!")
+        print("Done!")

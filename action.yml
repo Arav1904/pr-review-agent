@@ -1,0 +1,36 @@
+name: PR Review Agent
+description: AI-powered PR reviewer using GitAgent standard. Posts health scores, catches bugs, security issues, and suggests fixes.
+author: Arav1904
+
+branding:
+  icon: shield
+  color: blue
+
+inputs:
+  gemini_api_key:
+    description: Google Gemini API key
+    required: false
+  groq_api_key:
+    description: Groq API key (fallback LLM)
+    required: false
+  strictness:
+    description: Review strictness level (low/medium/high)
+    required: false
+    default: medium
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+    - name: Install dependencies
+      run: pip install google-genai requests pyyaml
+      shell: bash
+    - name: Run ReviewBot
+      run: python ${{ github.action_path }}/scripts/pr_review.py
+      shell: bash
+      env:
+        GEMINI_API_KEY: ${{ inputs.gemini_api_key }}
+        GROQ_API_KEY: ${{ inputs.groq_api_key }}
+        GITHUB_TOKEN: ${{ github.token }}
