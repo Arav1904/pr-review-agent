@@ -1,4 +1,4 @@
-import os, json, re, time, fnmatch, datetime, requests
+content = '''import os, json, re, time, fnmatch, datetime, requests
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 GROQ_API_KEY   = os.environ.get("GROQ_API_KEY")
@@ -52,7 +52,7 @@ def load_memory():
 
 def update_memory(pr_number, score, critical_count):
     os.makedirs("memory", exist_ok=True)
-    entry = f"\n## PR #{pr_number} - {datetime.date.today()}\n- Health Score: {score}/100\n- Critical issues: {critical_count}\n"
+    entry = f"\\n## PR #{pr_number} - {datetime.date.today()}\\n- Health Score: {score}/100\\n- Critical issues: {critical_count}\\n"
     with open("memory/dailylog.md", "a", encoding="utf-8") as f:
         f.write(entry)
     print("Memory updated")
@@ -60,7 +60,7 @@ def update_memory(pr_number, score, critical_count):
 SOUL  = load_file("SOUL.md")
 RULES = load_file("RULES.md")
 SKILL = load_file("skills/pr-review/SKILL.md")
-SYSTEM = f"{SOUL}\n\n---\n\n{RULES}\n\n---\n\n{SKILL}"
+SYSTEM = f"{SOUL}\\n\\n---\\n\\n{RULES}\\n\\n---\\n\\n{SKILL}"
 
 def gh_headers():
     return {"Authorization": f"Bearer {GITHUB_TOKEN}", "Accept": "application/vnd.github+json"}
@@ -113,7 +113,7 @@ def get_previous_score(repo_full, pr_number):
     url  = f"https://api.github.com/repos/{repo_full}/issues/comments/{cid}"
     resp = requests.get(url, headers=gh_headers())
     if resp.status_code == 200:
-        m = re.search(r"Health Score:\s*(\d+)", resp.json().get("body", ""))
+        m = re.search(r"Health Score:\\s*(\\d+)", resp.json().get("body", ""))
         if m:
             return int(m.group(1))
     return -1
@@ -130,7 +130,7 @@ def post_or_update_comment(repo_full, pr_number, body, score):
             trend = f" | Score dropped {diff} pts"
         else:
             trend = " | No score change"
-    footer = f"\n\n---\n*ReviewBot v3 powered by GitAgent + Gemini/Groq{trend} - {timestamp}*"
+    footer = f"\\n\\n---\\n*ReviewBot v3 powered by GitAgent + Gemini/Groq{trend} - {timestamp}*"
     full_body = body + footer
     cid = find_bot_comment(repo_full, pr_number)
     if cid:
@@ -206,13 +206,13 @@ def apply_labels(repo_full, pr_number, review_text, score):
 
 def generate_review(diff_text, file_info, config, memory):
     if not diff_text.strip():
-        return "## ReviewBot\nNo code changes detected.", 100
+        return "## ReviewBot\\nNo code changes detected.", 100
     strictness   = config.get("strictness", "medium")
     focus        = config.get("focus", {})
     custom_rules = config.get("custom_rules", [])
-    files_str    = "\n".join(f"- {f['filename']} (+{f.get('additions',0)}/-{f.get('deletions',0)} lines)" for f in file_info)
-    custom_str   = "\nCustom rules:\n" + "\n".join(f"- {r}" for r in custom_rules) if custom_rules else ""
-    memory_str   = f"\nProject context:\n{memory[:800]}" if memory else ""
+    files_str    = "\\n".join(f"- {f[\'filename\']} (+{f.get(\'additions\',0)}/-{f.get(\'deletions\',0)} lines)" for f in file_info)
+    custom_str   = "\\nCustom rules:\\n" + "\\n".join(f"- {r}" for r in custom_rules) if custom_rules else ""
+    memory_str   = f"\\nProject context:\\n{memory[:800]}" if memory else ""
     strictness_guide = {"low": "Only flag critical bugs and security.", "medium": "Balance thoroughness.", "high": "Flag everything including style."}.get(strictness, "Balance thoroughness.")
     prompt = f"""{SYSTEM}
 {memory_str}
@@ -293,7 +293,7 @@ NEVER give 100 if any suggestion exists.
 NEVER give above 91 for markdown or config files."""
     review_text = call_llm(prompt)
     score = 70
-    m = re.search(r"Health Score:\s*(\d+)", review_text)
+    m = re.search(r"Health Score:\\s*(\\d+)", review_text)
     if m:
         score = int(m.group(1))
     code_exts = (".py", ".js", ".ts", ".java", ".go", ".rb", ".cpp", ".c", ".cs", ".jsx", ".tsx")
@@ -331,11 +331,11 @@ if __name__ == "__main__":
     if not GITHUB_TOKEN:
         raise Exception("GITHUB_TOKEN is missing!")
     config = load_config()
-    print(f"Config loaded - strictness: {config.get('strictness', 'medium')}")
+    print(f"Config loaded - strictness: {config.get(\'strictness\', \'medium\')}")
     repo_full, pr_number, diff_text, is_draft, title, author = get_pr_info()
-    print(f"PR #{pr_number} '{title}' by @{author} in {repo_full}")
+    print(f"PR #{pr_number} \'{title}\' by @{author} in {repo_full}")
     if is_draft and config.get("skip_drafts", True):
-        msg = "## ReviewBot\nDraft PR detected - review will run when you mark ready for review."
+        msg = "## ReviewBot\\nDraft PR detected - review will run when you mark ready for review."
         post_or_update_comment(repo_full, pr_number, msg, -1)
         print("Draft notice posted.")
     else:
@@ -354,3 +354,9 @@ if __name__ == "__main__":
         apply_labels(repo_full, pr_number, review, score)
         update_memory(pr_number, score, review.lower().count("critical"))
         print("Done!")
+'''
+
+with open("scripts/pr_review.py", "w", encoding="utf-8") as f:
+    f.write(content)
+
+print("pr_review.py written successfully!")
