@@ -179,7 +179,7 @@ def apply_labels(repo_full, pr_number, review_text, score):
         return "none found" not in snippet and "none." not in snippet
     has_security = has_issues("critical issues") or has_issues("critical")
     has_bugs     = has_issues("bugs and logic") or has_issues("bugs")
-    has_perf     = "performance" in review_lower and has_issues("suggestions")
+    has_perf     = "performance" in review_lower and has_issues("suggestions") and score < 75
     has_no_tests = any(x in review_lower for x in ["missing test", "no test", "add test"])
     has_breaking = "breaking" in review_lower
     is_excellent = score >= 88
