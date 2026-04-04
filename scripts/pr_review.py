@@ -1,4 +1,4 @@
-import os, json, re, time, fnmatch, datetime, requests
+﻿import os, json, re, time, fnmatch, datetime, requests
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 GROQ_API_KEY   = os.environ.get("GROQ_API_KEY")
@@ -177,8 +177,8 @@ def apply_labels(repo_full, pr_number, review_text, score):
         idx = review_lower.find(keyword)
         snippet = review_lower[idx:idx+300]
         return "none found" not in snippet and "none." not in snippet
-    has_security = has_issues("critical issues")
-    has_bugs     = has_issues("bugs and logic")
+    has_security = has_issues("critical issues") or has_issues("critical")
+    has_bugs     = has_issues("bugs and logic") or has_issues("bugs")
     has_perf     = "performance" in review_lower and has_issues("suggestions")
     has_no_tests = any(x in review_lower for x in ["missing test", "no test", "add test"])
     has_breaking = "breaking" in review_lower
@@ -226,33 +226,33 @@ Files changed:
 
 Respond in EXACTLY this format:
 
-## ReviewBot Summary
+## 🤖 ReviewBot Summary
 **Health Score: [0-100]/100**
 **Files reviewed:** {len(file_info)} | **Verdict:** [Needs Changes / LGTM / Security Alert / Bug Alert]
 
 ---
 
-### Critical Issues
+### 🔒 Critical Issues
 [Security vulnerabilities, hardcoded secrets, injection risks. Write "None found." if clean.]
 
 ---
 
-### Bugs and Logic Errors
+### 🐛 Bugs and Logic Errors
 [Logic errors, unhandled exceptions. Write "None found." if clean.]
 
 ---
 
-### Suggestions
+### 💡 Suggestions
 [Performance, readability, missing error handling. Be specific with filenames and line numbers.]
 
 ---
 
-### What Is Done Well
+### ✅ What Is Done Well
 [Acknowledge clean patterns and good practices.]
 
 ---
 
-### Code Fixes
+### 🔧 Code Fixes
 [For EVERY issue found, provide the exact fix:]
 
 **Fix 1 - [Issue name] in [filename]:**
@@ -266,12 +266,12 @@ Respond in EXACTLY this format:
 
 ---
 
-### Key Insights
+### 🧠 Key Insights
 [3-5 bullet points - important lessons the author should remember, in simple encouraging language]
 
 ---
 
-### Per-File Summary
+### 📁 Per-File Summary
 [One line per file: filename - main observation]
 
 Diff to review:
