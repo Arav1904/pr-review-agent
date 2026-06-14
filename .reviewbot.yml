@@ -1,21 +1,185 @@
-strictness: medium
-skip_drafts: true
-max_diff_size: 15000
-skip_labels: false
+# ─── ReviewBot Configuration ──────────────────────────────────────────────────
+# Place this file at the root of your repo as .reviewbot.yml
+# ReviewBot reads this on every PR trigger to customize its behavior.
+# Version: 2.0 — OSC AI Build 1.0 Edition
 
-focus:
-  security: true
-  bugs: true
-  performance: true
-  style: false
+version: "2.0"
 
-skip_files:
-  - "*.lock"
-  - "*.min.js"
-  - "migrations/*"
-  - "TEST.md"
+# ── Agent Persona ─────────────────────────────────────────────────────────────
+# The SOUL defines the agent's tone, strictness, and focus areas.
+# You can also use a dedicated SOUL.md file (takes precedence over this block).
+soul:
+  persona: "Senior Staff Engineer at a product-led startup"
+  tone: "direct but constructive"      # options: strict | friendly | direct | mentor
+  depth: "thorough"                    # options: quick | standard | thorough
+  language: "en"                       # review comment language
 
-custom_rules:
-  - "Flag any hardcoded credentials or API keys"
-  - "Flag use of eval() or exec() on user input"
-  - "Check for missing input validation on functions"
+# ── Review Behavior ───────────────────────────────────────────────────────────
+review:
+  # Health score thresholds
+  score:
+    excellent: 80          # ≥ 80 → green badge
+    good:      60          # 60-79 → yellow badge
+    # < 60 → red badge — PR is flagged
+
+  # What to analyze (set false to skip)
+  checks:
+    security:         true    # OWASP top-10, injection, secrets exposure
+    performance:      true    # N+1 queries, unnecessary re-renders, loops
+    bugs:             true    # null dereference, off-by-one, type errors
+    code_style:       true    # naming conventions, dead code, complexity
+    documentation:    true    # missing JSDoc/docstrings, unclear function names
+    test_coverage:    false   # set true if your repo has tests
+    breaking_changes: true    # detects API signature changes
+
+  # Inline annotation settings
+  inline_annotations:
+    enabled:     true
+    max_per_pr:  15            # cap to avoid comment spam
+    min_severity: "warning"   # options: info | warning | critical
+    # Severities posted as inline comments; "info" goes to summary only
+
+  # Auto-labeling (applies GitHub labels automatically)
+  labels:
+    enabled: true
+    map:
+      security:     "security"
+      performance:  "performance"
+      bug:          "bug"
+      enhancement:  "enhancement"
+      refactor:     "refactor"
+      documentation:"documentation"
+      breaking:     "breaking-change"
+      chore:        "chore"
+
+  # Reviewer assignment
+  auto_assign:
+    enabled: false            # set true + fill reviewers list to auto-request reviews
+    reviewers: []
+
+# ── Multi-Language Support ───────────────────────────────────────────────────
+# ReviewBot detects language from file extensions.
+# You can set per-language rules or disable language-specific checks here.
+languages:
+  javascript:
+    enabled:  true
+    linting:  true
+    security: true
+    extras:   ["no-console", "no-eval", "react-hooks"]
+
+  typescript:
+    enabled:  true
+    linting:  true
+    security: true
+    extras:   ["strict-null-checks", "no-any"]
+
+  python:
+    enabled:  true
+    linting:  true
+    security: true                # checks for: eval, exec, shell injection
+    extras:   ["type-hints", "docstrings"]
+
+  java:
+    enabled:  true
+    linting:  true
+    security: true
+    extras:   ["null-safety", "exception-handling"]
+
+  go:
+    enabled:  true
+    linting:  true
+    security: true
+    extras:   ["error-handling", "goroutine-leaks"]
+
+  rust:
+    enabled:  true
+    linting:  true
+    security: false              # Rust's compiler handles most safety
+    extras:   ["unwrap-usage", "clippy-warnings"]
+
+  css:
+    enabled:  true
+    linting:  false
+    security: false
+    extras:   ["specificity", "unused-selectors"]
+
+  # Catch-all for other file types
+  default:
+    enabled:  true
+    linting:  false
+    security: true
+
+  # Files/patterns to completely skip
+  ignore:
+    - "**/*.lock"
+    - "**/dist/**"
+    - "**/build/**"
+    - "**/*.min.js"
+    - "**/*.min.css"
+    - "**/node_modules/**"
+    - "**/__pycache__/**"
+    - "**/*.pb.go"           # generated protobuf
+
+# ── Notification Hooks ────────────────────────────────────────────────────────
+# GitHub Actions secrets needed:
+#   SLACK_WEBHOOK_URL  — from Slack Incoming Webhooks app
+#   SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASS / NOTIFY_EMAIL — for email
+notifications:
+  slack:
+    enabled: true
+    # Webhook URL is stored in GitHub Actions secrets as SLACK_WEBHOOK_URL
+    trigger_on:
+      - pr_opened
+      - pr_reviewed
+      - score_below_threshold   # fires when score < review.score.good
+    include_score:     true
+    include_top_issue: true
+
+  email:
+    enabled: false             # set true when SMTP secrets are configured
+    trigger_on:
+      - score_below_threshold
+    subject_prefix: "[ReviewBot]"
+
+# ── LLM Configuration ────────────────────────────────────────────────────────
+llm:
+  primary:
+    provider: "gemini"
+    model:    "gemini-2.0-flash"
+    # API key: GEMINI_API_KEY secret
+    max_tokens: 4096
+    temperature: 0.1            # low = deterministic, consistent reviews
+
+  fallback:
+    provider: "groq"
+    model:    "llama-3.3-70b-versatile"
+    # API key: GROQ_API_KEY secret
+    max_tokens: 4096
+    temperature: 0.1
+    # Triggers if primary fails or is rate-limited
+
+  # Diff size limits to avoid token overflow
+  diff:
+    max_lines:   800            # truncate diffs larger than this
+    max_files:   20             # skip file-by-file review beyond this count
+    chunk_size:  250            # lines per chunk when splitting large diffs
+
+# ── Memory & Tracking ────────────────────────────────────────────────────────
+memory:
+  enabled: true
+  file:    "memory/score_trend.md"     # committed back to repo
+  track:
+    - pr_number
+    - health_score
+    - issues_count
+    - labels_applied
+    - author
+    - created_at
+
+# ── Dashboard ────────────────────────────────────────────────────────────────
+dashboard:
+  # The analytics dashboard reads from this config to know which repo to display.
+  # Deploy the /dashboard folder to Vercel or Netlify (no backend needed).
+  enabled: true
+  repo_owner: "Arav1904"
+  repo_name:  "pr-review-agent"
