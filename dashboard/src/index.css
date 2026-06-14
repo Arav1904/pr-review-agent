@@ -1,30 +1,37 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-  --bg-base:        #05070f;
-  --bg-card:        #0d1117;
-  --bg-card-hover:  #111827;
-  --bg-sidebar:     #080c14;
-  --border:         #1a2234;
-  --border-bright:  #243049;
-  --cyan:           #00e5ff;
-  --cyan-dim:       #00e5ff22;
-  --cyan-glow:      #00e5ff40;
-  --lime:           #39ff14;
-  --lime-dim:       #39ff1420;
-  --coral:          #ff4560;
-  --coral-dim:      #ff456018;
-  --amber:          #ffc107;
-  --amber-dim:      #ffc10718;
-  --purple:         #a78bfa;
-  --purple-dim:     #a78bfa18;
-  --text-primary:   #f1f5f9;
-  --text-secondary: #8892a4;
-  --text-muted:     #4a5568;
+  --bg-base:        #060810;
+  --bg-card:        #0e1320;
+  --bg-card-hover:  #131a2b;
+  --bg-elevated:    #161d2e;
+  --bg-sidebar:     #080c16;
+  --border:         #1d2740;
+  --border-bright:  #2a3654;
+
+  --cyan:           #2de2ff;
+  --cyan-dim:       #2de2ff1f;
+  --cyan-glow:      #2de2ff45;
+  --lime:           #4dff7a;
+  --lime-dim:       #4dff7a1f;
+  --coral:          #ff5d7a;
+  --coral-dim:      #ff5d7a1a;
+  --amber:          #ffcb47;
+  --amber-dim:      #ffcb471a;
+  --purple:         #b39bff;
+  --purple-dim:     #b39bff1a;
+  --pink:           #ff8fd6;
+
+  /* Brighter, higher-contrast text scale */
+  --text-primary:   #f5f8ff;
+  --text-secondary: #aab4cc;
+  --text-muted:     #6d7a99;
+  --text-faint:     #4a5570;
+
   --font-head:      'Space Grotesk', sans-serif;
   --font-body:      'Inter', sans-serif;
   --font-mono:      'JetBrains Mono', monospace;
-  --sidebar-w:      240px;
+  --sidebar-w:      248px;
   --radius-sm:      8px;
   --radius-md:      12px;
   --radius-lg:      18px;
@@ -51,10 +58,10 @@ body {
   min-height: 100vh;
 }
 
-::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar { width: 7px; height: 7px; }
 ::-webkit-scrollbar-track { background: var(--bg-base); }
-::-webkit-scrollbar-thumb { background: var(--border-bright); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+::-webkit-scrollbar-thumb { background: var(--border-bright); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-faint); }
 
 ::selection { background: var(--cyan-dim); color: var(--cyan); }
 
@@ -64,3 +71,45 @@ input, select, button { font-family: inherit; }
 
 .recharts-tooltip-wrapper { z-index: 999 !important; }
 .recharts-surface { overflow: visible; }
+
+/* ── Animations ───────────────────────────────────────────────────── */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes pulseGlow {
+  0%, 100% { opacity: 0.5; }
+  50%      { opacity: 1; }
+}
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.fade-up {
+  animation: fadeUp 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.fade-in {
+  animation: fadeIn 0.4s ease both;
+}
+
+/* ── Command palette overlay ─────────────────────────────────────── */
+.cmdk-overlay {
+  position: fixed; inset: 0; background: #02040acc;
+  backdrop-filter: blur(6px); z-index: 1000;
+  display: flex; align-items: flex-start; justify-content: center;
+  padding-top: 12vh; animation: fadeIn 0.15s ease;
+}
+.cmdk-panel {
+  width: 100%; max-width: 600px; background: var(--bg-elevated);
+  border: 1px solid var(--border-bright); border-radius: var(--radius-lg);
+  box-shadow: 0 24px 80px #000000a0, 0 0 0 1px var(--cyan-dim);
+  overflow: hidden; animation: fadeUp 0.2s cubic-bezier(0.16,1,0.3,1);
+}

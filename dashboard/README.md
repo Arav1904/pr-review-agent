@@ -1,75 +1,48 @@
-# React + TypeScript + Vite
+# 📊 Analytics Dashboard
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+**Live demo:** https://pr-review-agent-eight.vercel.app/
 
-Currently, two official plugins are available:
+PR ReviewBot ships with a full analytics dashboard that visualizes everything
+the AI agent tracks across your pull requests — health scores, trends,
+contributor leaderboards, and per-PR deep dives.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+### Features
 
-## React Compiler
+- **Live GitHub sync** — paste a personal access token and the dashboard pulls
+  real PR data, comments, and changed files directly from the GitHub API.
+- **Demo mode** — no token needed. One click loads a realistic 14-PR dataset
+  so judges/reviewers can explore every feature instantly.
+- **Animated health ring** — repo-wide score visualized as a glowing dial
+  with letter-grade (A+ to F).
+- **AI Insights panel** — auto-generated, plain-English takeaways: quality
+  trend direction, security exposure, top contributor, and file hotspots.
+- **Activity heatmap** — GitHub-contribution-style grid of PR activity over
+  the last 35 days.
+- **Composed trend chart** — health score, rolling average, and code churn
+  (additions/deletions) all on one chart.
+- **Team leaderboard** — ranked contributors with avg score, consistency %,
+  and net lines changed.
+- **Global search (⌘K / Ctrl+K)** — instantly jump to any PR, contributor,
+  label, or page from anywhere in the app.
+- **PR detail drawer** — click any PR to see its full score breakdown, files
+  changed, diff stats, and an AI-generated verdict.
 
-The React Compiler is enabled on this template. See [this documentation](https://react.dev/learn/react-compiler) for more information.
+### Local development
 
-Note: This will impact Vite dev & build performances.
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+cd dashboard
+npm install
+npm run dev      # http://localhost:5173
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+### Deployment
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+The dashboard is a standalone Vite + React app deployed to Vercel with:
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+| Setting | Value |
+|---|---|
+| Root Directory | `dashboard` |
+| Build Command | `npm run build` |
+| Output Directory | `dist` |
+
+Every push to `main` auto-deploys via Vercel's GitHub integration.
